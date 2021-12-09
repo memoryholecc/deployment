@@ -1,0 +1,132 @@
+version: "3.3"
+
+volumes:
+  mariadb:
+  redis:
+
+networks:
+  app:
+  proxy:
+  
+secrets:
+  DB_USER:
+    external: true
+  DB_PASSWORD:
+    external: true
+  DB_ROOT_PASSWORD:
+    external: true
+  PRISMA_DB_URL:
+    external: true
+  API_KEY:
+    external: true
+  MINIO_ACCESSKEY:
+    external: true
+  MINIO_SECRETKEY:
+    external: true
+  MINIO_HOST:
+    external: true
+services:
+  db:
+    image: mariadb
+    environment:
+       MYSQL_USER: memoryhole
+       MYSQL_DATABASE: memoryholedb
+       MYSQL_ROOT_PASSWORD_FILE: /run/secrets/DB_ROOT_PASSWORD
+       MYSQL_PASSWORD_FILE: /run/secrets/DB_PASSWORD
+    secrets:
+      - DB_PASSWORD
+      - DB_ROOT_PASSWORD
+    volumes:
+      - mariadb:/var/lib/mysql
+    hostname: db
+    deploy:
+      replicas: 1
+    networks:
+      - app
+
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis:/data
+    hostname: redis
+    deploy:
+      replicas: 1
+    networks:
+      - app
+
+  backend:
+    image: ghcr.io/memoryholecc/backend:latest
+    environment:
+      PORT: 3000
+      ENV: production
+      NODE_ENV: production
+      DATABASE_HOST: db
+      DATABASE_PORT: 3306
+      DATABASE_USER: memoryhole
+      DATABASE_NAME: memoryholedb
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CACHE_LIFETIME: 3000
+    secrets:
+      - DB_USER
+      - DB_PASSWORD
+      - PRISMA_DB_URL
+      - API_KEY
+    depends_on:
+      - db
+      - redis
+    hostname: backend
+    deploy:
+      replicas: 1
+    networks:
+      - app
+      - proxy
+
+  frontend:
+    image: ghcr.io/memoryholecc/frontend:latest
+    hostname: frontend
+    deploy:
+      replicas: 1
+    networks:
+      - app
+      - proxy
+
+  scraper:
+    image: ghcr.io/memoryholecc/patreondownloader:latest
+    environment:
+      THREADS: 10
+      MINIO_PUBLICENDPOINT: https://static-1.memoryhole.cc/memoryhole-public
+      MINIO_PUBLICE_NDPOINT: https://static-1.memoryhole.cc/memoryhole-public
+      MINIO_BUCKETNAME: memoryhole-public
+      REST_PORT: 7000
+      BACKEND_ENDPOINT: http://backend:3000/graphql
+    secrets:
+      - API_KEY
+      - MINIO_HOST
+      - MINIO_SECRETKEY
+      - MINIO_ACCESSKEY
+    depends_on:
+      - backend
+    hostname: scraper
+    deploy:
+      replicas: 1
+    networks:
+      - app
+      - proxy
+
+  caddy:
+     image: caddy
+     restart: always
+     ports:
+       - 443:443
+       - 80:80
+     volumes:
+       - ./Caddyfile:/etc/caddy/Caddyfile
+     depends_on:
+       - backend
+       - frontend
+     hostname: caddy
+     deploy:
+       replicas: 1
+     networks:
+       - proxy
